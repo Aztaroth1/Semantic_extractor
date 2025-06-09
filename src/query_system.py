@@ -16,6 +16,7 @@ import networkx as nx
 
 # Descargar recursos de NLTK
 nltk.download('punkt')
+nltk.download('punkt_tab', quiet=True) 
 nltk.download('stopwords')
 
 # Configuración de colores
@@ -181,7 +182,7 @@ class ReviewSearchApp:
         export_btn = ttk.Button(
             self.root,
             text="Exportar Grafo RDF",
-            command=self.export_rdf_graph_handler,
+            command=self.export_rdf_graph_handler,  # Cambia esto
             style="Accent.TButton"
         )
         export_btn.pack(pady=(5, 10))
@@ -269,6 +270,21 @@ class ReviewSearchApp:
             lines.append(current_line)
         
         return "\n".join(lines)
+
+    def export_rdf_graph_handler(self):
+        try:
+            from tkinter import filedialog
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv")],
+                title="Guardar Grafo RDF como..."
+            )
+            if not filename:
+                return  # Usuario canceló
+            export_path = self.query_system.export_rdf_triples_csv(filename)
+            messagebox.showinfo("Exportación exitosa", f"Grafo RDF exportado como:\n{export_path}")
+        except Exception as e:
+            messagebox.showerror("Error de exportación", f"No se pudo exportar el grafo RDF:\n{str(e)}")
 
 class UniversalReviewQuerySystem:
     def __init__(self, data_path):
@@ -472,22 +488,6 @@ class UniversalReviewQuerySystem:
         plt.title("Relaciones Producto-Sentimiento")
         plt.show()
 
-    def export_rdf_graph_handler(self):
-        try:
-            # Ask user for a filename/location
-            from tkinter import filedialog
-            filename = filedialog.asksaveasfilename(
-                defaultextension=".csv",
-                filetypes=[("CSV files", "*.csv")],
-                title="Guardar Grafo RDF como..."
-            )
-            if not filename:
-                return  # User cancelled
-            export_path = self.query_system.export_rdf_triples_csv(filename)
-            messagebox.showinfo("Exportación exitosa", f"Grafo RDF exportado como:\n{export_path}")
-        except Exception as e:
-            messagebox.showerror("Error de exportación", f"No se pudo exportar el grafo RDF:\n{str(e)}")
-    
     def _format_result(self, idx, score):
         """Formatea un resultado individual con la nueva estructura"""
         row = self.df.iloc[idx]
@@ -556,10 +556,11 @@ class UniversalReviewQuerySystem:
 
 if __name__ == "__main__":
     # Verificar existencia del archivo
-    data_path = './Data/processed_data/Dataset_processed_ner.csv'
+    data_path = './Data/processed_data/Electronics_processed_ner.csv'
     if not os.path.exists(data_path):
         messagebox.showerror("Error", f"Archivo no encontrado: {data_path}\nVerifique la ruta o ejecute primero el procesamiento de datos")
     else:
+        print(f"Cargando datos desde: {data_path}")
         root = tk.Tk()
         app = ReviewSearchApp(root, data_path)
         
