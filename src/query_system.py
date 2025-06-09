@@ -12,6 +12,7 @@ from tkinter import ttk, scrolledtext, messagebox
 from PIL import Image, ImageTk
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import networkx as nx
 
 # Descargar recursos de NLTK
 nltk.download('punkt')
@@ -176,6 +177,14 @@ class ReviewSearchApp:
         
         # Configurar estilos
         self.configure_styles()
+
+        export_btn = ttk.Button(
+            self.root,
+            text="Exportar Grafo RDF",
+            command=self.export_rdf_graph_handler,
+            style="Accent.TButton"
+        )
+        export_btn.pack(pady=(5, 10))
     
     def configure_styles(self):
         style = ttk.Style()
@@ -323,6 +332,161 @@ class UniversalReviewQuerySystem:
             if scores[idx] > min_score:
                 results.append(self._format_result(idx, scores[idx]))
         return results
+
+    def extract_rdf_triples(self):
+        """
+        Extract RDF-like triples from the reviews.
+        Example: (Usuario123, compró, Lavadora X300)
+                 (Lavadora X300, tiene_sentimiento, negativo)
+        """
+        triples = []
+        for _, row in self.df.iterrows():
+            persona = row.get('ner_persons', '')
+            producto = row.get('ner_products', '')
+            sentimiento = row.get('sentiment', '')  # assuming you have a sentiment column
+            if persona and producto:
+                triples.append((persona, 'compró', producto))
+            if producto and sentimiento:
+                triples.append((producto, 'tiene_sentimiento', sentimiento))
+        return triples
+
+    def build_rdf_graph(self):
+        """
+        Build an in-memory RDF graph from the extracted triples.
+        The graph is a dict: (subject, predicate) -> set(objects)
+        """
+        triples = self.extract_rdf_triples()
+        graph = {}
+        for subj, pred, obj in triples:
+            key = (subj, pred)
+            if key not in graph:
+                graph[key] = set()
+            graph[key].add(obj)
+        self.rdf_graph = graph
+        return graph
+
+    def query_rdf_graph(self, subject=None, predicate=None, obj=None):
+        """
+        Query the RDF graph for matches.
+        Any of subject, predicate, or object can be None to act as a wildcard.
+        Returns a list of matching triples.
+        """
+        if not hasattr(self, "rdf_graph"):
+            self.build_rdf_graph()
+        results = []
+        for (subj, pred), objects in self.rdf_graph.items():
+            if (subject is None or subject == subj) and (predicate is None or predicate == pred):
+                for o in objects:
+                    if obj is None or obj == o:
+                        results.append((subj, pred, o))
+        return results
+
+    def semantic_rdf_query(self, query_text):
+        """
+        Example: "productos con más quejas sobre batería en México"
+        Returns list of triples matching likely intent.
+        """
+        # This is a placeholder: for a real system, use NLP to parse intent
+        # For now, simple keyword mapping:
+        if "quejas" in query_text or "sentimiento negativo" in query_text:
+            # Find products with negative sentiment
+            triples = self.query_rdf_graph(predicate="tiene_sentimiento", obj="negativo")
+            # Further filter by location if mentioned
+            results = []
+            for s, p, o in triples:
+                # Find if product/location match (assuming you have location info in another triple)
+                # For now, just collect products
+                results.append((s, p, o))
+            return results
+        # Fallback: return all triples
+        return self.query_rdf_graph()
+    
+    def advanced_semantic_search(self, product=None, brand=None, sentiment=None, location=None, failure_keyword=None, top_n=10):
+        """
+        Filter reviews by product, brand, sentiment, location, failure keyword, etc.
+        Optionally rank by BM25 if failure_keyword is provided.
+        Returns a list of dicts: {review_id, score, data, text, triples}
+        """
+        df = self.df
+
+        # Filter by each attribute if given
+        if product:
+            df = df[df['ner_products'].str.contains(product, case=False, na=False)]
+        if brand:
+            df = df[df['ner_brands'].str.contains(brand, case=False, na=False)]
+        if sentiment:
+            if 'sentiment' in df.columns:
+                df = df[df['sentiment'].str.contains(sentiment, case=False, na=False)]
+        if location:
+            df = df[df['ner_locations'].str.contains(location, case=False, na=False)]
+        
+        # BM25 ranking by failure keyword (e.g. "batería", "pantalla", etc.)
+        if failure_keyword and not df.empty:
+            text_list = df['text'].astype(str).tolist()
+            # Tokenize
+            tokens = word_tokenize(failure_keyword.lower())
+            english_stopwords = set(stopwords.words('english'))
+            tokens = [t for t in tokens if t not in english_stopwords and len(t) > 2]
+            # Use BM25 from those filtered reviews
+            tokenized_texts = [word_tokenize(t.lower()) for t in text_list]
+            bm25 = BM25Okapi(tokenized_texts)
+            scores = bm25.get_scores(tokens)
+            top_indices = np.argsort(scores)[::-1][:top_n]
+            selected_rows = df.iloc[top_indices]
+        else:
+            selected_rows = df.head(top_n)
+
+        # Prepare results
+        results = []
+        for idx, row in selected_rows.iterrows():
+            score = 1.0  # default, or from BM25 if calculated
+            triples = []
+            persona = row.get('ner_persons', '')
+            producto = row.get('ner_products', '')
+            sentimiento = row.get('sentiment', '')
+            if persona and producto:
+                triples.append((persona, 'compró', producto))
+            if producto and sentimiento:
+                triples.append((producto, 'tiene_sentimiento', sentimiento))
+            # Use previous _format_result for other data
+            data = self._format_result(idx, score)
+            data['triples'] = triples
+            results.append(data)
+        return results
+
+    def visualize_product_sentiment_graph(self):
+        """
+        Visualize the graph of products and their associated sentiments.
+        """
+        if not hasattr(self, "rdf_graph"):
+            self.build_rdf_graph()
+        G = nx.DiGraph()
+        # Only add product-sentiment edges
+        for (subj, pred), objs in self.rdf_graph.items():
+            if pred == "tiene_sentimiento":
+                for obj in objs:
+                    G.add_edge(subj, obj)
+        plt.figure(figsize=(8, 6))
+        pos = nx.spring_layout(G, k=0.7)
+        nx.draw(G, pos, with_labels=True, node_color='skyblue', node_size=1500, edge_color='gray', font_size=10, font_family='Arial')
+        plt.title("Relaciones Producto-Sentimiento")
+        plt.show()
+
+    def export_rdf_graph_handler(self):
+        try:
+            # Ask user for a filename/location
+            from tkinter import filedialog
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv")],
+                title="Guardar Grafo RDF como..."
+            )
+            if not filename:
+                return  # User cancelled
+            export_path = self.query_system.export_rdf_triples_csv(filename)
+            messagebox.showinfo("Exportación exitosa", f"Grafo RDF exportado como:\n{export_path}")
+        except Exception as e:
+            messagebox.showerror("Error de exportación", f"No se pudo exportar el grafo RDF:\n{str(e)}")
     
     def _format_result(self, idx, score):
         """Formatea un resultado individual con la nueva estructura"""
@@ -392,7 +556,7 @@ class UniversalReviewQuerySystem:
 
 if __name__ == "__main__":
     # Verificar existencia del archivo
-    data_path = 'Data/processed_data/Beauty_40k_processed_ner.csv'
+    data_path = './Data/processed_data/Dataset_processed_ner.csv'
     if not os.path.exists(data_path):
         messagebox.showerror("Error", f"Archivo no encontrado: {data_path}\nVerifique la ruta o ejecute primero el procesamiento de datos")
     else:
